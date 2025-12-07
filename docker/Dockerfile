@@ -18,10 +18,6 @@ RUN bun install --ignore-scripts
 # Copy rest of the code
 COPY . .
 
-# Build shared package first
-WORKDIR /app/shared
-RUN bun run build
-
 # Build Vite frontend - backend URL is same origin in self-hosted mode
 WORKDIR /app/vite
 ENV VITE_BACKEND_URL=""
