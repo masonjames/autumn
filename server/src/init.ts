@@ -7,8 +7,10 @@ if (process.env.NODE_ENV !== "development") {
 }
 
 import cluster from "node:cluster";
+import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
+import path from "node:path";
 import { AppEnv } from "@autumn/shared";
 import { context, trace } from "@opentelemetry/api";
 import { toNodeHandler } from "better-auth/node";
@@ -64,7 +66,7 @@ const init = async () => {
 	const wildcardPatterns = [
 		/^https:\/\/.*\.useautumn\.com$/,
 		/^https:\/\/.*\.alphalog\.ai$/,
-		/^https:\/\/.*\.alphalog\.ai$/,
+		/^https:\/\/.*\.masonjames\.com$/,
 		/^chrome-extension:\/\/.*/,
 	];
 
@@ -206,6 +208,17 @@ const init = async () => {
 	// Legacy Express routes
 	app.use(mainRouter);
 	app.use("/v1", apiRouter);
+
+	// Serve static frontend files in production (self-hosted mode)
+	const viteDist = path.resolve(__dirname, "../../vite/dist");
+	if (process.env.NODE_ENV !== "development" && fs.existsSync(viteDist)) {
+		console.log(`Serving static frontend from ${viteDist}`);
+		app.use(express.static(viteDist));
+		// SPA fallback - serve index.html for any unmatched routes
+		app.get("*", (_req, res) => {
+			res.sendFile(path.join(viteDist, "index.html"));
+		});
+	}
 
 	const PORT = process.env.SERVER_PORT
 		? Number.parseInt(process.env.SERVER_PORT)
