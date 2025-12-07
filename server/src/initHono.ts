@@ -81,7 +81,10 @@ export const createHonoApp = () => {
 	// 	});
 	// });
 
-	app.get("/", handleHealthCheck);
+	// Health check endpoint - use /health for load balancers
+	// Root "/" is reserved for static frontend serving in self-hosted mode
+	app.get("/health", handleHealthCheck);
+	app.get("/_health", handleHealthCheck);
 
 	// Add Render region identifier header for load balancer verification
 	app.use("*", async (c, next) => {
