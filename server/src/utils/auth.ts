@@ -63,6 +63,9 @@ export const auth = betterAuth({
 			"https://app.useautumn.com",
 			"https://staging.useautumn.com",
 			"https://*.useautumn.com",
+			// Mason James self-hosted instance
+			"https://autumn.masonjames.com",
+			"https://*.masonjames.com",
 		];
 
 		// Add dynamic port origins in development
@@ -71,6 +74,11 @@ export const auth = betterAuth({
 			for (let i = 0; i <= 10; i++) {
 				origins.push(`http://localhost:${3000 + i}`);
 			}
+		}
+
+		// Add custom trusted origin from environment if specified
+		if (process.env.TRUSTED_ORIGIN) {
+			origins.push(process.env.TRUSTED_ORIGIN);
 		}
 
 		return origins;
