@@ -73,6 +73,11 @@ export const auth = betterAuth({
 			}
 		}
 
+		// Add custom trusted origin from environment for self-hosted instances
+		if (process.env.TRUSTED_ORIGIN) {
+			origins.push(process.env.TRUSTED_ORIGIN);
+		}
+
 		return origins;
 	})(),
 	emailAndPassword: {
