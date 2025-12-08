@@ -1,0 +1,128 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 8 AM UTC
+  workflow_dispatch:
+    inputs:
+      create_pr:
+        description: 'Create PR instead of direct merge'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  sync:
+    name: Sync with useautumn/autumn
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/useautumn/autumn.git || true
+          git fetch upstream
+
+      - name: Check for upstream changes
+        id: check
+        run: |
+          UPSTREAM_COMMITS=$(git rev-list HEAD..upstream/dev --count 2>/dev/null || echo "0")
+          echo "upstream_commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          if [ "$UPSTREAM_COMMITS" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Found $UPSTREAM_COMMITS new commits from upstream"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new commits from upstream"
+          fi
+
+      - name: Attempt merge
+        if: steps.check.outputs.has_changes == 'true'
+        id: merge
+        run: |
+          # Try to merge upstream
+          if git merge upstream/dev --no-edit; then
+            echo "merge_success=true" >> $GITHUB_OUTPUT
+            echo "Merge successful"
+          else
+            echo "merge_success=false" >> $GITHUB_OUTPUT
+            echo "Merge has conflicts"
+            git merge --abort
+          fi
+
+      - name: Push changes (direct merge)
+        if: |
+          steps.check.outputs.has_changes == 'true' &&
+          steps.merge.outputs.merge_success == 'true' &&
+          github.event.inputs.create_pr != 'true'
+        run: |
+          git push origin dev
+
+      - name: Create PR for merge
+        if: |
+          steps.check.outputs.has_changes == 'true' &&
+          steps.merge.outputs.merge_success == 'true' &&
+          github.event.inputs.create_pr == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="upstream-sync-$(date +%Y%m%d)"
+          git checkout -b $BRANCH
+          git push origin $BRANCH
+          gh pr create \
+            --title "chore: sync with upstream $(date +%Y-%m-%d)" \
+            --body "Automated sync with useautumn/autumn upstream repository." \
+            --base dev \
+            --head $BRANCH
+
+      - name: Create issue for conflicts
+        if: |
+          steps.check.outputs.has_changes == 'true' &&
+          steps.merge.outputs.merge_success == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if issue already exists
+          EXISTING=$(gh issue list --search "Upstream sync conflict" --state open --json number --jq '.[0].number' || echo "")
+          if [ -z "$EXISTING" ]; then
+            gh issue create \
+              --title "Upstream sync conflict - manual merge required" \
+              --body "The automated sync with useautumn/autumn has conflicts that need manual resolution.
+
+          **Steps to resolve:**
+          1. Fetch upstream: \`git fetch upstream\`
+          2. Merge manually: \`git merge upstream/dev\`
+          3. Resolve conflicts
+          4. Push changes
+
+          **Upstream commits:** ${{ steps.check.outputs.upstream_commits }} new commits" \
+              --label "upstream-sync"
+          else
+            echo "Issue #$EXISTING already exists for upstream conflicts"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Upstream Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Upstream commits:** ${{ steps.check.outputs.upstream_commits }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Has changes:** ${{ steps.check.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.has_changes }}" == "true" ]; then
+            echo "**Merge success:** ${{ steps.merge.outputs.merge_success }}" >> $GITHUB_STEP_SUMMARY
+          fi
