@@ -23,6 +23,8 @@ import webhooksRouter from "./external/webhooks/webhooksRouter.js";
 import { redirectToHono } from "./initHono.js";
 import { apiRouter } from "./internal/api/apiRouter.js";
 import mainRouter from "./internal/mainRouter.js";
+import { sparkaRouter } from "./routers/sparkaRouter.js";
+import { withSparkaSession } from "./middleware/sparkaSessionMiddleware.js";
 import { auth } from "./utils/auth.js";
 import { generateId } from "./utils/genUtils.js";
 import { checkEnvVars } from "./utils/initUtils.js";
@@ -204,6 +206,12 @@ const init = async () => {
 		});
 		next();
 	});
+
+	// Sparka cross-subdomain SSO middleware (non-blocking, adds user info to req)
+	app.use(withSparkaSession);
+
+	// Sparka SSO routes (before auth required routes)
+	app.use("/sparka", sparkaRouter);
 
 	// Legacy Express routes
 	app.use(mainRouter);
