@@ -4,7 +4,10 @@ import {
 	SuccessCode,
 } from "@autumn/shared";
 import type Stripe from "stripe";
-import { getStripeSubs } from "@/external/stripe/stripeSubUtils.js";
+import {
+	getStripeSubs,
+	isStripeSubscriptionCanceled,
+} from "@/external/stripe/stripeSubUtils.js";
 import { CusProductService } from "@/internal/customers/cusProducts/CusProductService.js";
 import type { AutumnContext } from "../../../../../honoUtils/HonoEnv.js";
 import type { AttachParams } from "../../../cusProducts/AttachParams.js";
@@ -22,9 +25,8 @@ export const handleUpdateQuantityFunction = async ({
 }) => {
 	const { db } = ctx;
 
-	// 2. Update quantities
+	// Update quantities
 	const optionsToUpdate = attachParams.optionsToUpdate!;
-	const { customer } = attachParams;
 	const { curSameProduct } = attachParamToCusProducts({ attachParams });
 
 	// Check balance of each option to update...?
@@ -53,10 +55,23 @@ export const handleUpdateQuantityFunction = async ({
 		}
 	}
 
+	for (const stripeSub of stripeSubs) {
+		if (isStripeSubscriptionCanceled({ sub: stripeSub })) {
+			await stripeCli.subscriptions.update(stripeSub.id, {
+				cancel_at: null,
+			});
+		}
+	}
+
 	await CusProductService.update({
 		db,
 		cusProductId: cusProduct.id,
-		updates: { options: optionsToUpdate.map((o) => o.new) },
+		updates: {
+			options: optionsToUpdate.map((o) => o.new),
+			canceled_at: null,
+			canceled: false,
+			ended_at: null,
+		},
 	});
 
 	return AttachFunctionResponseSchema.parse({
@@ -65,15 +80,4 @@ export const handleUpdateQuantityFunction = async ({
 		invoice:
 			config.invoiceOnly && invoices.length > 0 ? invoices[0] : undefined,
 	});
-
-	// res.status(200).json(
-	// 	AttachResultSchema.parse({
-	// 		customer_id: customer.id || customer.internal_id,
-	// 		product_ids: attachParams.products.map((p) => p.id),
-	// 		invoice:
-	// 			config.invoiceOnly && invoices.length > 0 ? invoices[0] : undefined,
-	// 		code: SuccessCode.FeaturesUpdated,
-	// 		message: `Successfully updated quantity for features: ${optionsToUpdate.map((o) => o.new.feature_id).join(", ")}`,
-	// 	}),
-	// );
 };

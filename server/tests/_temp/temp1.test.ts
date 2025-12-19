@@ -1,85 +1,89 @@
-import { beforeAll, describe, test } from "bun:test";
+import { beforeAll, describe } from "bun:test";
 import { ApiVersion } from "@autumn/shared";
 import { TestFeature } from "@tests/setup/v2Features.js";
 import ctx from "@tests/utils/testInitUtils/createTestContext.js";
 import chalk from "chalk";
 import { AutumnInt } from "@/external/autumn/autumnCli.js";
 import { constructProduct } from "@/utils/scriptUtils/createTestProducts.js";
-import {
-	constructFeatureItem,
-	constructPrepaidItem,
-} from "../../src/utils/scriptUtils/constructItem.js";
+import { constructFeatureItem } from "../../src/utils/scriptUtils/constructItem.js";
 import { initCustomerV3 } from "../../src/utils/scriptUtils/testUtils/initCustomerV3.js";
 import { initProductsV0 } from "../../src/utils/scriptUtils/testUtils/initProductsV0.js";
 
-// UNCOMMENT FROM HERE
-const pro = constructProduct({
-	type: "pro",
+const free = constructProduct({
+	type: "free",
 	isDefault: false,
 
 	items: [
 		constructFeatureItem({
-			featureId: TestFeature.Credits,
-			includedUsage: 250,
+			featureId: TestFeature.Messages,
+			includedUsage: 5,
 		}),
 	],
 });
-const proEntity = constructProduct({
+
+const pro = constructProduct({
 	type: "pro",
-	id: "pro-entity",
-	isDefault: false,
-
 	items: [
-		constructPrepaidItem({
-			featureId: TestFeature.Credits,
-			includedUsage: 0,
+		constructFeatureItem({
+			featureId: TestFeature.Messages,
+			includedUsage: 300,
 		}),
 	],
 });
 
-describe(`${chalk.yellowBright("temp: Testing entity prorated")}`, () => {
-	const customerId = "temp";
+export const premium = constructProduct({
+	type: "premium",
+	items: [
+		constructFeatureItem({
+			featureId: TestFeature.Messages,
+			includedUsage: 100,
+		}),
+	],
+});
+
+const entity = {
+	id: "entity1",
+	name: "Entity 1",
+	feature_id: TestFeature.Messages,
+};
+
+describe(`${chalk.yellowBright("temp1: Testing pro product")}`, () => {
+	const customerId = "temp1";
 	const autumn: AutumnInt = new AutumnInt({ version: ApiVersion.V1_2 });
 
 	beforeAll(async () => {
 		await initCustomerV3({
 			ctx,
 			customerId,
-			customerData: {},
-			attachPm: "success",
 			withTestClock: true,
+			attachPm: "success",
 		});
 
 		await initProductsV0({
 			ctx,
-			products: [pro, proEntity],
+			products: [free, pro, premium],
 			prefix: customerId,
+			// customerId,
 		});
 
-		await autumn.entities.create(customerId, [
-			{
-				id: "1",
-				name: "test",
-				feature_id: TestFeature.Users,
-			},
-		]);
-	});
+		await autumn.entities.create(customerId, [entity]);
 
-	test("should create a subscription with prepaid and prorated", async () => {
-		await autumn.attach({
-			customer_id: customerId,
-			product_id: pro.id,
-		});
-		await autumn.attach({
-			customer_id: customerId,
-			product_id: proEntity.id,
-			entity_id: "1",
-			options: [
-				{
-					feature_id: TestFeature.Credits,
-					quantity: 300,
-				},
-			],
-		});
+		// await autumn.attach({
+		// 	customer_id: customerId,
+		// 	product_id: pro.id,
+		// 	entity_id: entity.id,
+		// });
+
+		// await autumn.attach({
+		// 	customer_id: customerId,
+		// 	product_id: free.id,
+		// 	entity_id: entity.id,
+		// });
+
+		// await autumn.attach({
+		// 	customer_id: customerId,
+		// 	product_id: premium.id,
+		// 	entity_id: entity.id,
+		// });
 	});
 });

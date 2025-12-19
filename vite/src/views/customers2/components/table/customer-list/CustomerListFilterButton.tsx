@@ -1,6 +1,7 @@
 import { FunnelSimpleIcon } from "@phosphor-icons/react";
 import { X } from "lucide-react";
 import { useState } from "react";
+import { IconButton } from "@/components/v2/buttons/IconButton";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -8,8 +9,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { IconButton } from "@/components/v2/buttons/IconButton";
+} from "@/components/v2/dropdowns/DropdownMenu";
 import { cn } from "@/lib/utils";
 import { FilterStatusSubMenu } from "@/views/customers/components/filter-dropdown/FilterStatusSubMenu";
 import { ProductsSubMenu } from "@/views/customers/components/filter-dropdown/ProductsSubMenu";
@@ -66,16 +66,18 @@ export function CustomerListFilterButton() {
 						setDropdownOpen={setOpen}
 					/>
 				)}
-				<div className="flex h-9 items-stretch">
+				<div className="flex h-9 items-stretch justify-between">
 					<DropdownMenuItem
 						onClick={() => clearFilters()}
-						className="cursor-pointer justify-center gap-0 w-full"
+						className="cursor-pointer justify-center gap-0 flex-1"
 					>
 						<X size={12} className="mr-2 text-t3" />
 						<p className="text-t3">Clear</p>
 					</DropdownMenuItem>
 
-					<SaveViewPopover onClose={closeFilterModal} />
+					<div className="flex-1">
+						<SaveViewPopover onClose={closeFilterModal} />
+					</div>
 				</div>
 			</DropdownMenuContent>
 		</DropdownMenu>

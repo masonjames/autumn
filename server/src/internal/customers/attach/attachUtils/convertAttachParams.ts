@@ -11,7 +11,39 @@ export const attachParamsToCurCusProduct = ({
 	const { curMainProduct, curSameProduct, curScheduledProduct } =
 		attachParamToCusProducts({ attachParams });
 
-	return curSameProduct || curMainProduct;
+	// 1. If same product:
+	if (
+		curSameProduct &&
+		curSameProduct.product.id !== curScheduledProduct?.product.id
+	) {
+		return curSameProduct;
+	}
+
+	// 2. If main product, then return main product
+	const product = attachParamsToProduct({ attachParams });
+	if (!product.is_add_on && curMainProduct) {
+		return curMainProduct;
+	}
+
+	return undefined;
+};
+
+export const attachParamsToMergeCusProduct = ({
+	attachParams,
+}: {
+	attachParams: AttachParams;
+}) => {
+	const { curMainProduct, curSameProduct, curScheduledProduct } =
+		attachParamToCusProducts({ attachParams });
+
+	if (
+		curSameProduct &&
+		curSameProduct.product.id !== curScheduledProduct?.product.id
+	) {
+		return curSameProduct;
+	}
+
+	return curMainProduct;
 };
 
 export const attachParamToCusProducts = ({
@@ -37,9 +69,7 @@ export const attachParamToCusProducts = ({
 			internalEntityId: attachParams.internalEntityId,
 		});
 
-	const curCusProduct = curMainProduct || curSameProduct;
-
-	return { curMainProduct, curSameProduct, curScheduledProduct, curCusProduct };
+	return { curMainProduct, curSameProduct, curScheduledProduct };
 };
 
 export const attachParamsToProduct = ({
@@ -47,7 +77,7 @@ export const attachParamsToProduct = ({
 }: {
 	attachParams: AttachParams;
 }) => {
-	const { org, features, prices, entitlements, freeTrial } = attachParams;
+	const { prices, entitlements, freeTrial } = attachParams;
 	const product = attachParams.products[0];
 
 	return {
@@ -75,9 +105,11 @@ export const getSubForAttach = async ({
 export const getCustomerSub = async ({
 	attachParams,
 	onlySubId,
+	targetSubId,
 }: {
 	attachParams: AttachParams;
 	onlySubId?: boolean;
+	targetSubId?: string;
 }) => {
 	const { stripeCli } = attachParams;
 	const fullCus = attachParams.customer;
@@ -88,6 +120,10 @@ export const getCustomerSub = async ({
 	const targetProductId = attachParams.products[0].id;
 
 	cusProducts.sort((a, b) => {
+		if (targetSubId) {
+			if (a.subscription_ids && a.subscription_ids.includes(targetSubId)) return -1;
+			if (b.subscription_ids && b.subscription_ids.includes(targetSubId)) return 1;
+		}
 		// 1. Check same group
 		const aGroupMatches = a.product.group === targetGroup;
 		const bGroupMatches = b.product.group === targetGroup;
@@ -130,9 +166,6 @@ export const getCustomerSub = async ({
 	if (onlySubId) {
 		return { subId: subId, sub: undefined, cusProduct: undefined };
 	}
-
-	// If there's only one customer product on sub, and it's still trialing, return undefined, because should just replace sub.
-	const curCusProduct = attachParamsToCurCusProduct({ attachParams });
 
 	const sub = await stripeCli.subscriptions.retrieve(subId, {
 		expand: [
@@ -227,11 +260,9 @@ export const paramsToCurSub = async ({
 	attachParams: AttachParams;
 }) => {
 	const { stripeCli } = attachParams;
-	const curCusProduct = attachParamsToCurCusProduct({ attachParams });
-	// console.log("Cur cus product:", curCusProduct);
-	// console.log("Sub IDs:", curCusProduct?.subscription_ids);
-
-	const subIds = curCusProduct?.subscription_ids || [];
+	// const curCusProduct = attachParamsToCurCusProduct({ attachParams });
+	const mergeCusProduct = attachParamsToMergeCusProduct({ attachParams });
+	const subIds = mergeCusProduct?.subscription_ids || [];
 
 	if (subIds.length === 0) {
 		return undefined;

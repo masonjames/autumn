@@ -36,10 +36,10 @@ async function startDev() {
 		const backendUrl =
 			process.env.VITE_BACKEND_URL ||
 			getEnvVariable(viteEnvPath, "VITE_BACKEND_URL");
-		const isUsingRemoteBackend = backendUrl?.includes("api.useautumn.com");
+		const isUsingRemoteBackend = backendUrl?.includes(".useautumn.com");
 
 		if (isUsingRemoteBackend) {
-			console.log("\n🌐 Using remote backend (api.useautumn.com)");
+			console.log("\n🌐 Using remote backend (*.useautumn.com)");
 			console.log("⏭️  Skipping port cleanup...\n");
 		} else {
 			// Port cleanup disabled (detection is unreliable)
@@ -55,35 +55,47 @@ async function startDev() {
 
 		console.log("🚀 Starting development servers in watch mode...\n");
 
-		// Start server, workers, and vite using Bun.spawn
-		// Use sh -c to run the shell command with cd
-		const concurrentlyProc = Bun.spawn(
-			[
+		// Use cmd on Windows, sh on Unix
+		const isWindows = process.platform === "win32";
+
+		let shellArgs: string[];
+		if (isWindows) {
+			const serverCmd = `cd server && set SERVER_PORT=${SERVER_PORT} && bun dev`;
+			const workersCmd = `cd server && bun workers:dev`;
+			const viteCmd = `cd vite && set VITE_PORT=${VITE_PORT} && bun dev`;
+			shellArgs = [
+				"cmd",
+				"/c",
+				`bunx concurrently -n server,workers,vite -c green,yellow,blue "${serverCmd}" "${workersCmd}" "${viteCmd}"`,
+			];
+		} else {
+			shellArgs = [
 				"sh",
 				"-c",
 				`bunx concurrently -n server,workers,vite -c green,yellow,blue "cd server && SERVER_PORT=${SERVER_PORT} bun dev" "cd server && bun workers:dev" "cd vite && VITE_PORT=${VITE_PORT} bun dev"`,
-			],
-			{
-				cwd: projectRoot,
-				env: {
-					...process.env,
-					VITE_PORT: VITE_PORT.toString(),
-					SERVER_PORT: SERVER_PORT.toString(),
-				},
-				stdout: "inherit",
-				stderr: "inherit",
-				onExit(proc, exitCode, signalCode, error) {
-					if (error) {
-						console.error("Failed to start development servers:", error);
-						process.exit(1);
-					}
-					if (exitCode !== 0 && exitCode !== null) {
-						console.error(`Development servers exited with code ${exitCode}`);
-					}
-					process.exit(exitCode ?? 0);
-				},
+			];
+		}
+
+		const concurrentlyProc = Bun.spawn(shellArgs, {
+			cwd: projectRoot,
+			env: {
+				...process.env,
+				VITE_PORT: VITE_PORT.toString(),
+				SERVER_PORT: SERVER_PORT.toString(),
 			},
-		);
+			stdout: "inherit",
+			stderr: "inherit",
+			onExit(proc, exitCode, signalCode, error) {
+				if (error) {
+					console.error("Failed to start development servers:", error);
+					process.exit(1);
+				}
+				if (exitCode !== 0 && exitCode !== null) {
+					console.error(`Development servers exited with code ${exitCode}`);
+				}
+				process.exit(exitCode ?? 0);
+			},
+		});
 
 		// Handle termination signals
 		process.on("SIGINT", () => {

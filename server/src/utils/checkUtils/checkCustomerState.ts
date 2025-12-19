@@ -1,53 +1,107 @@
-import {
-	type AppEnv,
-	CusProductStatus,
-	cusProductToPrices,
-	type FullCusProduct,
-	type FullCustomer,
-	isFreeProduct,
-	type Organization,
-} from "@autumn/shared";
+import type { AppEnv, FullCustomer, Organization } from "@autumn/shared";
 import type { DrizzleCli } from "@server/db/initDrizzle.js";
-import { getRelatedCusPrice } from "@server/internal/customers/cusProducts/cusEnts/cusEntUtils.js";
-import { isOneOff } from "@server/internal/products/productUtils.js";
 import type Stripe from "stripe";
-import { checkCusSubCorrect } from "./checkCustomerCorrect.js";
+import type { AutumnContext } from "../../honoUtils/HonoEnv.js";
+import { checkCusProducts } from "./checkCusProducts.js";
+import {
+	checkCusSubCorrect,
+	SubItemMismatchError,
+} from "./checkCustomerCorrect.js";
+import { checkSubCountMatch } from "./checkSubCountMatch.js";
+import { saveCheckState } from "./saveCheckState.js";
+import type { StateCheckResult } from "./stateCheckTypes.js";
 
-export type SubItemDetail = {
-	priceId: string;
-	quantity: number;
-	productName?: string;
-	priceName?: string;
-};
-
-export type CheckResult = {
-	passed: boolean;
-	errors: string[];
-	warnings: string[];
-	checks: {
-		name: string;
-		passed: boolean;
-		message?: string;
-	}[];
-	// Detailed sub info when there's a mismatch
-	subscriptionDetails?: {
-		subId: string;
-		actualItems: SubItemDetail[];
-		expectedItems: SubItemDetail[];
-	};
-};
+// Re-export for backwards compatibility
+export type { RedisChecksState } from "./stateCheckTypes.js";
 
 /**
  * Runs state checks on a customer and returns structured results.
  * Does not throw - captures all errors in the result object.
  */
 export const runCustomerStateChecks = async ({
+	// db,
+	ctx,
+	fullCus,
+	subs,
+	schedules,
+	// org,
+	// env,
+}: {
+	// db: DrizzleCli;
+	ctx: AutumnContext;
+	fullCus: FullCustomer;
+	subs: Stripe.Subscription[];
+	schedules: Stripe.SubscriptionSchedule[];
+}): Promise<StateCheckResult> => {
+	const { db, org, env } = ctx;
+	const result: StateCheckResult = {
+		passed: true,
+		errors: [],
+		warnings: [],
+		checks: [],
+	};
+
+	// If fullCus has no processor ID, unlinked from Stripe
+	if (!fullCus.processor?.id) {
+		result.passed = true;
+		result.warnings.push("Customer is unlinked from Stripe");
+		result.checks.push({
+			type: "overall_status",
+			name: "Overall Status",
+			passed: false,
+		});
+		return result;
+	}
+
+	// Check: Subscription correctness (from checkCusSubCorrect)
+	await testSubscriptionCorrectness({
+		db,
+		fullCus,
+		subs,
+		schedules,
+		org,
+		env,
+		result,
+	});
+
+	// Check each customer product
+	await checkCusProducts({
+		fullCus,
+		result,
+	});
+
+	// Check: Subscription IDs match Stripe
+	await checkSubCountMatch({
+		ctx,
+		fullCus,
+		subs,
+		result,
+	});
+
+	// Add summary info
+	if (result.errors.length === 0 && result.warnings.length === 0) {
+		result.checks.unshift({
+			type: "overall_status",
+			name: "Overall Status",
+			passed: true,
+			message: "All checks passed",
+		});
+	}
+
+	// // Save to Redis only if there are failures
+	// await saveCheckState({ org, env, fullCus, result });
+
+	return result;
+};
+
+export const testSubscriptionCorrectness = async ({
 	db,
 	fullCus,
 	subs,
 	schedules,
 	org,
 	env,
+	result,
 }: {
 	db: DrizzleCli;
 	fullCus: FullCustomer;
@@ -55,17 +109,8 @@ export const runCustomerStateChecks = async ({
 	schedules: Stripe.SubscriptionSchedule[];
 	org: Organization;
 	env: AppEnv;
-}): Promise<CheckResult> => {
-	const result: CheckResult = {
-		passed: true,
-		errors: [],
-		warnings: [],
-		checks: [],
-	};
-
-	const cusProducts = fullCus.customer_products || [];
-
-	// Check: Subscription correctness (from checkCusSubCorrect)
+	result: StateCheckResult;
+}): Promise<void> => {
 	try {
 		await checkCusSubCorrect({
 			db,
@@ -77,6 +122,7 @@ export const runCustomerStateChecks = async ({
 		});
 		result.checks.push({
 			name: "Subscription Correctness",
+			type: "subscription_correctness",
 			passed: true,
 		});
 	} catch (error) {
@@ -85,131 +131,18 @@ export const runCustomerStateChecks = async ({
 		result.errors.push(`Subscription check failed: ${errorMsg}`);
 		result.checks.push({
 			name: "Subscription Correctness",
+			type: "subscription_correctness",
 			passed: false,
 			message: errorMsg,
 		});
-	}
 
-	// Check each customer product
-	for (const cusProduct of cusProducts) {
-		const productName = cusProduct.product?.name || cusProduct.product_id;
-
-		// Check: Scheduled products should have a main product
-		if (cusProduct.status === CusProductStatus.Scheduled) {
-			const mainCusProd = cusProducts.find(
-				(cp: FullCusProduct) =>
-					cp.product.group === cusProduct.product.group &&
-					cp.id !== cusProduct.id &&
-					cp.status !== CusProductStatus.Scheduled &&
-					(cusProduct.internal_entity_id
-						? cusProduct.internal_entity_id === cp.internal_entity_id
-						: true),
-			);
-
-			if (!mainCusProd) {
-				result.passed = false;
-				result.errors.push(
-					`Scheduled product "${productName}" has no main product`,
-				);
-				result.checks.push({
-					name: `Scheduled Product: ${productName}`,
-					passed: false,
-					message: "No main product found for scheduled product",
-				});
-			} else {
-				result.checks.push({
-					name: `Scheduled Product: ${productName}`,
-					passed: true,
-				});
-			}
-		}
-
-		// Check: No duplicate non-add-on products in same group
-		if (
-			!cusProduct.product.is_add_on &&
-			cusProduct.status !== CusProductStatus.Scheduled
-		) {
-			const group = cusProduct.product.group;
-			const otherCusProd = cusProducts.find(
-				(cp: FullCusProduct) =>
-					cp.product.group === group &&
-					cp.id !== cusProduct.id &&
-					!cp.product.is_add_on &&
-					cp.status !== CusProductStatus.Scheduled &&
-					cp.internal_entity_id === cusProduct.internal_entity_id,
-			);
-
-			if (otherCusProd) {
-				result.passed = false;
-				result.errors.push(
-					`Duplicate products in group "${group}": "${productName}" and "${otherCusProd.product?.name}"`,
-				);
-				result.checks.push({
-					name: `Group Uniqueness: ${productName}`,
-					passed: false,
-					message: `Found duplicate: ${otherCusProd.product?.name}`,
-				});
-			} else {
-				result.checks.push({
-					name: `Group Uniqueness: ${productName}`,
-					passed: true,
-				});
-			}
-		}
-
-		// Check: Customer entitlements with usage_allowed should have related cus_price
-		const prices = cusProductToPrices({ cusProduct });
-		if (
-			!isOneOff(prices) &&
-			!isFreeProduct({ prices }) &&
-			cusProduct.status !== CusProductStatus.Scheduled
-		) {
-			for (const cusEnt of cusProduct.customer_entitlements || []) {
-				const cusPrice = getRelatedCusPrice(cusEnt, cusProduct.customer_prices);
-
-				if (cusEnt.usage_allowed && !cusPrice) {
-					result.passed = false;
-					result.errors.push(
-						`Product "${productName}": Feature "${cusEnt.feature_id}" has usage_allowed but no related cus_price`,
-					);
-					result.checks.push({
-						name: `Entitlement Price: ${cusEnt.feature_id}`,
-						passed: false,
-						message: "usage_allowed but no cus_price",
-					});
-				}
-			}
+		// Capture subscription item details if this is a SubItemMismatchError
+		if (error instanceof SubItemMismatchError) {
+			result.subscriptionDetails = {
+				subId: error.subId,
+				actualItems: error.actualItems,
+				expectedItems: error.expectedItems,
+			};
 		}
 	}
-
-	// Check: Subscription IDs match Stripe
-	const subIds = cusProducts.flatMap((cp) => cp.subscription_ids) || [];
-	const stripeSubs = subs.filter((sub) => {
-		const subCustomerId =
-			typeof sub.customer === "string" ? sub.customer : sub.customer?.id;
-		return subCustomerId === fullCus.processor?.id;
-	});
-
-	if (stripeSubs.length !== subIds.length) {
-		result.passed = false;
-		result.errors.push(
-			`Expected ${subIds.length} subs in total, found ${stripeSubs.length} in Stripe`,
-		);
-	} else {
-		result.checks.push({
-			name: `Subscription Match`,
-			passed: true,
-		});
-	}
-
-	// Add summary info
-	if (result.errors.length === 0 && result.warnings.length === 0) {
-		result.checks.unshift({
-			name: "Overall Status",
-			passed: true,
-			message: "All checks passed",
-		});
-	}
-
-	return result;
 };

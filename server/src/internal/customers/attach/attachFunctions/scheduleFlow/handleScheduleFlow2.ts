@@ -16,6 +16,7 @@ import {
 	isFreeProduct,
 } from "@/internal/products/productUtils.js";
 import type { AutumnContext } from "../../../../../honoUtils/HonoEnv.js";
+import { addSubIdToCache } from "../../../cusCache/subCacheUtils.js";
 import {
 	attachParamsToCurCusProduct,
 	getCustomerSchedule,
@@ -45,7 +46,7 @@ export const handleScheduleFunction2 = async ({
 		attachParams,
 	});
 
-	const { sub: curSub } = await getCustomerSub({ attachParams });
+	const { sub: curSub } = await getCustomerSub({ attachParams, targetSubId: curCusProduct?.subscription_ids?.[0] });
 
 	// 1. Cancel current subscription and fetch items from other cus products...?
 	let { schedule } = await getCustomerSchedule({
@@ -139,6 +140,13 @@ export const handleScheduleFunction2 = async ({
 		}
 	} else {
 		logger.info(`SCHEDULE FLOW: no schedule, creating new schedule`);
+
+		// Add sub ID to upstash so renew isn't being handled...
+		await addSubIdToCache({
+			subId: curSub.id,
+			scenario: AttachScenario.Renew,
+		});
+
 		schedule = await subToNewSchedule({
 			ctx,
 			sub: curSub,

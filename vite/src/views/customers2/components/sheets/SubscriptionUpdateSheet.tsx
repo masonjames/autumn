@@ -1,6 +1,10 @@
-import type { FullCusProduct, ProductV2 } from "@autumn/shared";
+import type {
+	FrontendProduct,
+	FullCusProduct,
+	ProductV2,
+} from "@autumn/shared";
 import { ArrowLeft } from "@phosphor-icons/react";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { UpdateProductActions } from "@/components/forms/attach-product/update-product-actions";
 import { UpdateProductPrepaidOptions } from "@/components/forms/attach-product/update-product-prepaid-options";
 import { UpdateProductSummary } from "@/components/forms/attach-product/update-product-summary";
@@ -12,10 +16,7 @@ import {
 import { FormWrapper } from "@/components/general/form/form-wrapper";
 import { Button } from "@/components/v2/buttons/Button";
 import { SheetHeader } from "@/components/v2/sheets/InlineSheet";
-import {
-	usePrepaidItems,
-	useProductStore,
-} from "@/hooks/stores/useProductStore";
+import { usePrepaidItems } from "@/hooks/stores/useProductStore";
 import { useSheetStore } from "@/hooks/stores/useSheetStore";
 import { useSubscriptionById } from "@/hooks/stores/useSubscriptionStore";
 import { useCusQuery } from "@/views/customers/customer/hooks/useCusQuery";
@@ -24,15 +25,18 @@ const FormContent = ({
 	productV2,
 	cusProduct,
 	form,
+	customizedProduct,
 }: {
 	productV2: ProductV2;
 	cusProduct: FullCusProduct;
 	form: UseAttachProductForm;
+	customizedProduct: FrontendProduct | undefined;
 }) => {
 	const { customer } = useCusQuery();
-	const customerId = customer?.id;
-	const storeProduct = useProductStore((s) => s.product);
-	const product = storeProduct?.id ? storeProduct : (productV2 ?? undefined);
+	const customerId = customer?.id ?? customer?.internal_id;
+	const product = customizedProduct?.id
+		? customizedProduct
+		: (productV2 ?? undefined);
 	const entityId = cusProduct?.entity_id ?? undefined;
 
 	const prepaidOptions = form.state.values.prepaidOptions;
@@ -72,7 +76,7 @@ const FormContent = ({
 			return currentQuantity !== initialQuantity;
 		});
 
-		if (!hasQuantityChanges && !storeProduct?.id) {
+		if (!hasQuantityChanges && !customizedProduct?.id) {
 			return null;
 		}
 	}
@@ -100,16 +104,18 @@ const FormContent = ({
 function SheetContent({
 	cusProduct,
 	productV2,
-
 	itemId,
+	customizedProduct,
 }: {
 	cusProduct: FullCusProduct;
 	productV2: ProductV2;
 	itemId: string | null;
+	customizedProduct: FrontendProduct | undefined;
 }) {
-	const storeProduct = useProductStore((s) => s.product);
-	const product = storeProduct?.id ? storeProduct : (productV2 ?? undefined);
-	const { prepaidItems, isLoading } = usePrepaidItems({ product });
+	const product = customizedProduct?.id
+		? customizedProduct
+		: (productV2 ?? undefined);
+	const { prepaidItems } = usePrepaidItems({ product });
 
 	const subscriptionPrepaidValues = useMemo(
 		() =>
@@ -124,8 +130,8 @@ function SheetContent({
 	);
 
 	const initialPrepaidOptions = useMemo(() => {
-		if (isLoading || prepaidItems.length === 0) {
-			return subscriptionPrepaidValues;
+		if (prepaidItems.length === 0) {
+			return {};
 		}
 
 		return prepaidItems.reduce(
@@ -136,7 +142,7 @@ function SheetContent({
 			},
 			{} as Record<string, number | undefined>,
 		) as Record<string, number>;
-	}, [prepaidItems, subscriptionPrepaidValues, isLoading]);
+	}, [prepaidItems, subscriptionPrepaidValues]);
 
 	const form = useAttachProductForm({
 		initialProductId: cusProduct?.product.id ?? undefined,
@@ -167,14 +173,13 @@ function SheetContent({
 						{() => (
 							<>
 								{prepaidItems.length > 0 && (
-									// <SheetSection className="" withSeparator={false}>
 									<UpdateProductPrepaidOptions form={form} />
-									// </SheetSection>
 								)}
 								<FormContent
 									productV2={productV2}
 									cusProduct={cusProduct}
 									form={form}
+									customizedProduct={customizedProduct}
 								/>
 							</>
 						)}
@@ -188,22 +193,13 @@ function SheetContent({
 export function SubscriptionUpdateSheet() {
 	const itemId = useSheetStore((s) => s.itemId);
 	const setSheet = useSheetStore((s) => s.setSheet);
+	const sheetData = useSheetStore((s) => s.data);
 
 	const { cusProduct, productV2 } = useSubscriptionById({ itemId });
 
-	const sheetType = useSheetStore((s) => s.type);
-	const resetProductStore = useProductStore((s) => s.reset);
-
-	useEffect(() => {
-		if (
-			sheetType !== "subscription-detail" &&
-			sheetType !== "subscription-update"
-		) {
-			resetProductStore();
-		}
-	}, [sheetType, resetProductStore]);
-
-	// Load subscription's product into store on mount
+	const customizedProduct = sheetData?.customizedProduct as
+		| FrontendProduct
+		| undefined;
 
 	if (!cusProduct) {
 		return (
@@ -235,6 +231,7 @@ export function SubscriptionUpdateSheet() {
 			cusProduct={cusProduct}
 			productV2={productV2}
 			itemId={itemId}
+			customizedProduct={customizedProduct}
 		/>
 	);
 }

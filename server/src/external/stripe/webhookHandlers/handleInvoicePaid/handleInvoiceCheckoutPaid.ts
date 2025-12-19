@@ -5,6 +5,7 @@ import type { AttachParams } from "@/internal/customers/cusProducts/AttachParams
 import { attachToInsertParams } from "@/internal/products/productUtils.js";
 import type { AutumnContext } from "../../../../honoUtils/HonoEnv.js";
 import { deleteCachedApiCustomer } from "../../../../internal/customers/cusUtils/apiCusCacheUtils/deleteCachedApiCustomer.js";
+import { MetadataService } from "../../../../internal/metadata/MetadataService.js";
 
 export const handleInvoiceCheckoutPaid = async ({
 	ctx,
@@ -14,6 +15,9 @@ export const handleInvoiceCheckoutPaid = async ({
 	metadata: Metadata;
 }) => {
 	const { logger, org, env, db } = ctx;
+	logger.info(
+		`invoice.paid, handling invoice checkout paid for metadata: ${metadata.id}`,
+	);
 
 	const { subId, anchorToUnix, config, ...rest } =
 		metadata.data as AttachParams;
@@ -47,6 +51,11 @@ export const handleInvoiceCheckoutPaid = async ({
 	logger.info(
 		`✅ invoice.paid, successfully inserted cus products: ${attachParams.products.map((p) => p.id).join(", ")}`,
 	);
+
+	await MetadataService.delete({
+		db: ctx.db,
+		id: metadata.id,
+	});
 
 	await deleteCachedApiCustomer({
 		customerId: attachParams.customer.id || "",

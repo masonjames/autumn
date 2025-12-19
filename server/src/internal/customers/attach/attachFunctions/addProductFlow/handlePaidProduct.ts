@@ -1,25 +1,27 @@
 import {
+	type AttachBranch,
 	type AttachConfig,
 	type AttachFunctionResponse,
 	AttachFunctionResponseSchema,
 	AttachScenario,
-	ErrCode,
 	isTrialing,
+	MetadataType,
 	SuccessCode,
 } from "@autumn/shared";
+import { addMinutes } from "date-fns";
 import type Stripe from "stripe";
 import { getEarliestPeriodEnd } from "@/external/stripe/stripeSubUtils/convertSubUtils.js";
 import { getStripeSubItems2 } from "@/external/stripe/stripeSubUtils/getStripeSubItems.js";
-import { subIsCanceled } from "@/external/stripe/stripeSubUtils.js";
+import { isStripeSubscriptionCanceled } from "@/external/stripe/stripeSubUtils.js";
+
+import { attachParamsToMetadata } from "@/internal/billing/attach/utils/attachParamsToMetadata.js";
 import { createFullCusProduct } from "@/internal/customers/add-product/createFullCusProduct.js";
-import { handleCreateCheckout } from "@/internal/customers/add-product/handleCreateCheckout.js";
-import { type AttachParams } from "@/internal/customers/cusProducts/AttachParams.js";
+import type { AttachParams } from "@/internal/customers/cusProducts/AttachParams.js";
 import { insertInvoiceFromAttach } from "@/internal/invoices/invoiceUtils.js";
 import { getNextStartOfMonthUnix } from "@/internal/products/prices/billingIntervalUtils.js";
 import { addIntervalToAnchor } from "@/internal/products/prices/billingIntervalUtils2.js";
 import { getSmallestInterval } from "@/internal/products/prices/priceUtils/priceIntervalUtils.js";
 import { attachToInsertParams } from "@/internal/products/productUtils.js";
-import RecaseError from "@/utils/errorUtils.js";
 import type { AutumnContext } from "../../../../../honoUtils/HonoEnv.js";
 import { getCustomerDisplay } from "../../../../billing/attach/utils/getCustomerDisplay.js";
 import {
@@ -36,10 +38,12 @@ export const handlePaidProduct = async ({
 	ctx,
 	attachParams,
 	config,
+	branch,
 }: {
 	ctx: AutumnContext;
 	attachParams: AttachParams;
 	config: AttachConfig;
+	branch: AttachBranch;
 }): Promise<AttachFunctionResponse> => {
 	const { logger, db } = ctx;
 
@@ -64,9 +68,14 @@ export const handlePaidProduct = async ({
 
 	const subscriptions: Stripe.Subscription[] = [];
 
-	const { sub: mergeSub, cusProduct: mergeCusProduct } = await getCustomerSub({
+	let { sub: mergeSub, cusProduct: mergeCusProduct } = await getCustomerSub({
 		attachParams,
 	});
+
+	if (attachParams.newBillingSubscription) {
+		mergeSub = undefined;
+		mergeCusProduct = undefined;
+	}
 
 	let sub: Stripe.Subscription | null = null;
 	let schedule: Stripe.SubscriptionSchedule | null | undefined = null;
@@ -93,12 +102,13 @@ export const handlePaidProduct = async ({
 			config,
 		});
 
-		const { updatedSub, latestInvoice } = await updateStripeSub2({
+		const { updatedSub, latestInvoice, url } = await updateStripeSub2({
 			ctx,
 			attachParams,
 			curSub: mergeSub,
 			itemSet: newItemSet,
 			config,
+			branch,
 			fromCreate: true,
 		});
 
@@ -112,7 +122,16 @@ export const handlePaidProduct = async ({
 				logger,
 			});
 		}
-		if (subIsCanceled({ sub: mergeSub })) {
+
+		if (url) {
+			return AttachFunctionResponseSchema.parse({
+				checkout_url: url,
+				code: SuccessCode.InvoiceActionRequired,
+				message: "Payment action required",
+			});
+		}
+
+		if (isStripeSubscriptionCanceled({ sub: mergeSub })) {
 			logger.info("ADD PRODUCT FLOW, CREATING NEW SCHEDULE");
 			schedule = await subToNewSchedule({
 				ctx,
@@ -148,16 +167,16 @@ export const handlePaidProduct = async ({
 			prices: attachParams.prices,
 		});
 
-		// 1. If anchor to start of month, get next month anchor
 		if (org.config.anchor_start_of_month) {
+			// 1. If anchor to start of month, get next month anchor
 			billingCycleAnchorUnix = getNextStartOfMonthUnix({
 				interval: smallestInterval!.interval,
 				intervalCount: smallestInterval!.intervalCount,
 			});
 		}
 
-		// 2. If merge sub anchor, use it
 		if (mergeSub && !config.disableMerge) {
+			// 2. If merge sub anchor, use it
 			billingCycleAnchorUnix = addIntervalToAnchor({
 				anchorUnix: mergeSub.billing_cycle_anchor * 1000,
 				intervalConfig: smallestInterval!,
@@ -165,45 +184,61 @@ export const handlePaidProduct = async ({
 			});
 		}
 
-		// 3. If billing cycle anchor, just use it
 		if (attachParams.billingAnchor) {
+			// 3. If billing cycle anchor, just use it
 			billingCycleAnchorUnix = attachParams.billingAnchor;
 		}
 
 		// console.log("Item set: ", itemSet);
-		try {
-			sub = await createStripeSub2({
+		sub = await createStripeSub2({
+			db: ctx.db,
+			stripeCli,
+			attachParams,
+			itemSet,
+			billingCycleAnchorUnix,
+			config,
+			logger,
+		});
+
+		if (sub?.latest_invoice) {
+			invoice = await insertInvoiceFromAttach({
 				db: ctx.db,
-				stripeCli,
+				stripeInvoice: sub.latest_invoice as Stripe.Invoice,
 				attachParams,
-				itemSet,
-				billingCycleAnchorUnix,
-				config,
 				logger,
 			});
+		}
 
-			if (sub?.latest_invoice) {
-				invoice = await insertInvoiceFromAttach({
-					db: ctx.db,
-					stripeInvoice: sub.latest_invoice as Stripe.Invoice,
-					attachParams,
-					logger,
-				});
-			}
-		} catch (error) {
-			if (
-				error instanceof RecaseError &&
-				!invoiceOnly &&
-				error.code === ErrCode.CreateStripeSubscriptionFailed
-			) {
-				return await handleCreateCheckout({
-					ctx,
-					attachParams,
+		const subInvoice: Stripe.Invoice | undefined =
+			sub.latest_invoice as Stripe.Invoice;
+
+		if (subInvoice && subInvoice.status === "open" && !config.invoiceCheckout) {
+			logger.info(
+				`[create subscription] invoice checkout created because invoice is open: ${subInvoice.id}`,
+			);
+			const metadata = await attachParamsToMetadata({
+				db: ctx.db,
+				attachParams: {
+					...attachParams,
+					subId: sub.id,
+					anchorToUnix: sub.billing_cycle_anchor * 1000,
 					config,
-				});
-			}
+				},
+				type: MetadataType.InvoiceCheckout,
+				stripeInvoiceId: subInvoice.id as string,
+				expiresAt: addMinutes(Date.now(), 10).getTime(),
+			});
 
-			throw error;
+			await stripeCli.invoices.update(subInvoice.id, {
+				metadata: {
+					autumn_metadata_id: metadata.id,
+				},
+			});
+			return AttachFunctionResponseSchema.parse({
+				checkout_url: subInvoice.hosted_invoice_url,
+				code: SuccessCode.InvoiceActionRequired,
+				message: "Payment action required",
+			});
 		}
 	}
 
@@ -218,12 +253,6 @@ export const handlePaidProduct = async ({
 			anchorToUnix,
 			config,
 		});
-		// return {
-		// 	invoices: subscriptions.map((s) => s.latest_invoice as Stripe.Invoice),
-		// 	subs: subscriptions,
-		// 	anchorToUnix,
-		// 	config,
-		// };
 	}
 
 	// Add product and entitlements to customer
@@ -255,30 +284,4 @@ export const handlePaidProduct = async ({
 		customer_id: customer.id || customer.internal_id,
 		invoice: invoiceOnly ? invoice : undefined,
 	});
-
-	// if (res) {
-	// const productNames = products.map((p) => p.name).join(", ");
-	// const customerName = customer.name || customer.email || customer.id;
-	// if (req.apiVersion.gte(ApiVersion.V1_1)) {
-	// 	res.status(200).json(
-	// 		AttachResultSchema.parse({
-	// 			message: `Successfully created subscriptions and attached ${productNames} to ${customerName}`,
-	// 			code: SuccessCode.NewProductAttached,
-	// 			product_ids: products.map((p) => p.id),
-	// 			customer_id: customer.id || customer.internal_id,
-	// 			invoice: invoiceOnly
-	// 				? attachToInvoiceResponse({ invoice })
-	// 				: undefined,
-	// 		}),
-	// 	);
-	// } else {
-	// 	res.status(200).json({
-	// 		success: true,
-	// 		message: `Successfully created subscriptions and attached ${products
-	// 			.map((p) => p.name)
-	// 			.join(", ")} to ${customer.name}`,
-	// 		invoice: invoiceOnly ? invoice : undefined,
-	// 	});
-	// }
-	// }
 };

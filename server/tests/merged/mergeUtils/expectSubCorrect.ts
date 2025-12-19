@@ -14,7 +14,7 @@ import type Stripe from "stripe";
 import type { DrizzleCli } from "@/db/initDrizzle.js";
 import { createStripeCli } from "@/external/connect/createStripeCli.js";
 import { priceToStripeItem } from "@/external/stripe/priceToStripeItem/priceToStripeItem.js";
-import { subIsCanceled } from "@/external/stripe/stripeSubUtils.js";
+import { isStripeSubscriptionCanceled } from "@/external/stripe/stripeSubUtils.js";
 import {
 	cusProductInPhase,
 	logPhaseItems,
@@ -33,6 +33,7 @@ import {
 } from "@/internal/products/prices/priceUtils.js";
 import { isFreeProduct } from "@/internal/products/productUtils.js";
 import { formatUnixToDateTime, nullish } from "@/utils/genUtils.js";
+import type { TestContext } from "../../utils/testInitUtils/createTestContext.js";
 import { cusProductToSubIds } from "../mergeUtils.test.js";
 
 const compareActualItems = async ({
@@ -429,7 +430,7 @@ export const expectSubToBeCorrect = async ({
 	if (finalShouldBeCanceled) {
 		expect(sub.schedule).toBeNull();
 		// expect(sub.cancel_at).toBeDefined();
-		expect(subIsCanceled({ sub })).toBe(true);
+		expect(isStripeSubscriptionCanceled({ sub })).toBe(true);
 		return;
 	}
 
@@ -491,4 +492,32 @@ export const expectSubToBeCorrect = async ({
 	//   expect(sub.cancel_at).toBeDefined();
 	// } else {
 	// }
+};
+
+export const expectSubCount = async ({
+	ctx,
+	customerId,
+	count,
+}: {
+	ctx: TestContext;
+	customerId: string;
+	count: number;
+}) => {
+	const stripeCli = ctx.stripeCli;
+	const customer = await CusService.get({
+		db: ctx.db,
+		idOrInternalId: customerId,
+		orgId: ctx.org.id,
+		env: ctx.env,
+	});
+
+	if (!customer?.processor?.id) {
+		throw new Error(`Customer ${customerId} has no processor`);
+	}
+
+	const subs = await stripeCli.subscriptions.list({
+		customer: customer?.processor?.id,
+	});
+
+	expect(subs.data.length).toBe(count);
 };

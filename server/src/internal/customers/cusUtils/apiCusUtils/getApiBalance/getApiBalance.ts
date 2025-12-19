@@ -10,10 +10,11 @@ import {
 	CheckExpand,
 	CusExpand,
 	cusEntMatchesFeature,
+	cusEntsToAdjustment,
+	cusEntsToAllowance,
+	cusEntsToBalance,
 	cusEntsToMaxPurchase,
-	cusEntToBalance,
 	cusEntToCusPrice,
-	cusEntToGrantedBalance,
 	cusEntToKey,
 	cusEntToPurchasedBalance,
 	dbToApiFeatureV1,
@@ -22,7 +23,6 @@ import {
 	FeatureType,
 	getCusEntBalance,
 	isPrepaidPrice,
-	notNullish,
 	sumValues,
 } from "@autumn/shared";
 import { Decimal } from "decimal.js";
@@ -77,6 +77,7 @@ const cusEntsToBreakdown = ({
 			fullCus,
 			cusEnts,
 			feature,
+			includeRollovers: false,
 		});
 
 		const prepaidQuantity = cusEntsToPrepaidQuantity({ cusEnts, feature });
@@ -143,11 +144,13 @@ export const getApiBalance = ({
 	fullCus,
 	cusEnts,
 	feature,
+	includeRollovers = true,
 }: {
 	ctx: RequestContext;
 	fullCus: FullCustomer;
 	cusEnts: FullCusEntWithFullCusProduct[];
 	feature: Feature;
+	includeRollovers?: boolean;
 }): { data: ApiBalance; legacyData?: CusFeatureLegacyData } => {
 	const entityId = fullCus.entity?.id;
 
@@ -199,24 +202,18 @@ export const getApiBalance = ({
 
 	const totalMaxPurchase = cusEntsToMaxPurchase({ cusEnts, entityId });
 
-	// 1. Granted balance
-	const totalGrantedBalanceWithRollovers = sumValues(
-		cusEnts.map((cusEnt) =>
-			cusEntToGrantedBalance({ cusEnt, entityId, withRollovers: true }),
-		),
-	);
+	const totalAllowanceWithRollovers = cusEntsToAllowance({
+		cusEnts,
+		entityId,
+		withRollovers: includeRollovers,
+	});
 
-	const totalAdjustment = sumValues(
-		cusEnts.map((cusEnt) => {
-			const { adjustment } = getCusEntBalance({
-				cusEnt,
-				entityId,
-			});
-			return adjustment;
-		}),
-	);
+	const totalAdjustment = cusEntsToAdjustment({
+		cusEnts,
+		entityId,
+	});
 
-	const grantedBalance = new Decimal(totalGrantedBalanceWithRollovers)
+	const grantedBalance = new Decimal(totalAllowanceWithRollovers)
 		.add(totalAdjustment)
 		.toNumber();
 
@@ -226,17 +223,11 @@ export const getApiBalance = ({
 	);
 
 	// 3. Current balance
-	const totalBalanceWithRollovers = sumValues(
-		cusEnts
-			.map((cusEnt) =>
-				cusEntToBalance({
-					cusEnt,
-					entityId,
-					withRollovers: true,
-				}),
-			)
-			.filter(notNullish),
-	);
+	const totalBalanceWithRollovers = cusEntsToBalance({
+		cusEnts,
+		entityId,
+		withRollovers: includeRollovers,
+	});
 
 	const currentBalance = new Decimal(Math.max(0, totalBalanceWithRollovers))
 		.add(totalAdditionalBalance)

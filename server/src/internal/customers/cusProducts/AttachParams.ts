@@ -86,6 +86,8 @@ export type AttachParams = {
 	// Invoice action required
 	stripeInvoiceId?: string;
 	cusEntIds?: string[];
+
+	newBillingSubscription?: boolean;
 };
 
 export type InsertCusProductParams = {
@@ -114,12 +116,15 @@ export type InsertCusProductParams = {
 	isCustom?: boolean;
 	disableFreeTrial?: boolean;
 	features: Feature[];
+	fromCancel?: boolean;
 
 	entityId?: string;
 	internalEntityId?: string;
 	fromMigration?: boolean;
 	apiVersion?: ApiVersion;
 	finalizeInvoice?: boolean;
+
+	newBillingSubscription?: boolean;
 };
 
 // export const AttachResultSchema = z.object({

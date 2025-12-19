@@ -11,6 +11,7 @@ import {
 	type FullCustomer,
 	getMaxOverage,
 	getRelevantFeatures,
+	getStartingBalance,
 	InternalError,
 	notNullish,
 	nullish,
@@ -19,6 +20,7 @@ import {
 } from "@autumn/shared";
 import { Decimal } from "decimal.js";
 import { sql } from "drizzle-orm";
+import { getEntOptions } from "@/internal/products/prices/priceUtils.js";
 import type { AutumnContext } from "../../../../honoUtils/HonoEnv.js";
 import { EventService } from "../../../api/events/EventService.js";
 import { CusService } from "../../../customers/CusService.js";
@@ -139,6 +141,16 @@ export const deductFromCusEnts = async ({
 				ce.entitlement.feature.config?.usage_type ===
 					FeatureUsageType.Continuous && nullish(cusPrice);
 
+			// NOTE: WE USE STARTING BALANCE BECAUSE ADJUSTMENT IS ADDED IN performDeduction.sql function
+			const resetBalance = getStartingBalance({
+				entitlement: ce.entitlement,
+				options:
+					getEntOptions(ce.customer_product.options, ce.entitlement) ||
+					undefined,
+				relatedPrice: cusPrice?.price,
+				productQuantity: ce.customer_product.quantity,
+			});
+
 			return {
 				customer_entitlement_id: ce.id,
 				credit_cost: creditCost,
@@ -148,6 +160,7 @@ export const deductFromCusEnts = async ({
 					(isFreeAllocated && overageBehaviour !== "reject"),
 				min_balance: notNullish(maxOverage) ? -maxOverage : undefined,
 				add_to_adjustment: addToAdjustment,
+				max_balance: resetBalance,
 			};
 		});
 

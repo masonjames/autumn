@@ -1,11 +1,11 @@
 import {
-	AttachResultSchema,
+	AttachBodyV0Schema,
+	AttachResponseV1Schema,
 	CancelBodySchema,
 	CancelResultSchema,
-	CheckoutResponseSchema,
+	CheckoutParamsV0Schema,
+	CheckoutResponseV0Schema,
 	CheckResponseV2Schema,
-	ExtAttachBodySchema,
-	ExtCheckoutParamsSchema,
 	ExtCheckParamsSchema,
 	QueryParamsSchema,
 	QueryResultSchema,
@@ -26,7 +26,6 @@ import {
 } from "../common/jsDocs.js";
 import {
 	GetBillingPortalBodySchema,
-	GetBillingPortalQuerySchema,
 	GetBillingPortalResponseSchema,
 } from "../customers/customerOpModels.js";
 
@@ -40,7 +39,7 @@ export const coreOps: ZodOpenApiPathsObject = {
 			requestBody: {
 				content: {
 					"application/json": {
-						schema: ExtAttachBodySchema,
+						schema: AttachBodyV0Schema,
 						examples: {
 							basic: {
 								summary: "Attach a product immediately",
@@ -60,7 +59,7 @@ export const coreOps: ZodOpenApiPathsObject = {
 					description: "Product attached successfully",
 					content: {
 						"application/json": {
-							schema: AttachResultSchema,
+							schema: AttachResponseV1Schema,
 						},
 					},
 				},
@@ -73,12 +72,12 @@ export const coreOps: ZodOpenApiPathsObject = {
 			description: checkoutJsDoc,
 			tags: ["core"],
 			requestBody: {
-				content: { "application/json": { schema: ExtCheckoutParamsSchema } },
+				content: { "application/json": { schema: CheckoutParamsV0Schema } },
 			},
 			responses: {
 				"200": {
 					description: "200 OK",
-					content: { "application/json": { schema: CheckoutResponseSchema } },
+					content: { "application/json": { schema: CheckoutResponseV0Schema } },
 				},
 			},
 		},
@@ -173,26 +172,7 @@ export const coreOps: ZodOpenApiPathsObject = {
 			},
 		},
 	},
-	// "/billing_portal": {
-	// 	post: {
-	// 		summary: "Create Billing Portal Session",
-	// 		description: billingPortalJsDoc,
-	// 		tags: ["core"],
-	// 		requestBody: {
-	// 			content: {
-	// 				"application/json": { schema: BillingPortalParamsSchema },
-	// 			},
-	// 		},
-	// 		responses: {
-	// 			"200": {
-	// 				description: "200 OK",
-	// 				content: {
-	// 					"application/json": { schema: BillingPortalResultSchema },
-	// 				},
-	// 			},
-	// 		},
-	// 	},
-	// },
+
 	"/customers/{customer_id}/billing_portal": {
 		post: {
 			summary: "Create Billing Portal Session",
@@ -202,7 +182,7 @@ export const coreOps: ZodOpenApiPathsObject = {
 				path: z.object({
 					customer_id: z.string(),
 				}),
-				query: GetBillingPortalQuerySchema,
+				// query: GetBillingPortalQuerySchema,
 			},
 			requestBody: {
 				content: {
@@ -223,23 +203,4 @@ export const coreOps: ZodOpenApiPathsObject = {
 			},
 		},
 	},
-
-	// "/usage": {
-	// 	post: {
-	// 		summary: "Set Usage",
-	// 		description: setUsageJsDoc,
-	// 		tags: ["core"],
-	// 		requestBody: {
-	// 			content: {
-	// 				"application/json": { schema: SetUsageParamsSchema },
-	// 			},
-	// 		},
-	// 		responses: {
-	// 			"200": {
-	// 				description: "200 OK",
-	// 				content: { "application/json": { schema: SuccessResponseSchema } },
-	// 			},
-	// 		},
-	// 	},
-	// },
 };
