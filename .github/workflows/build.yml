@@ -1,11 +1,9 @@
-name: Build and Push to ECR
+# DEPRECATED: Legacy AWS ECR build workflow.
+# Platform now uses GHCR + Dokploy webhook (see ghcr-build.yml).
+# Kept as manual-only for emergency AWS ECR deployments.
+name: "[DEPRECATED] Build and Push to ECR"
 
 on:
-  push:
-    branches:
-      - main
-      - staging
-      
   workflow_dispatch:
     inputs:
       tag:

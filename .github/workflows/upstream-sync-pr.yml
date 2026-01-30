@@ -1,0 +1,247 @@
+# Autumn Upstream Sync PR Creator
+# Creates a PR when upstream has new commits, validates fork customizations
+name: Upstream Sync PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_pr:
+        description: 'Create PR even if already up to date'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+
+env:
+  UPSTREAM_REPO: useautumn/autumn
+  UPSTREAM_BRANCH: dev
+
+jobs:
+  create-sync-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream ${{ env.UPSTREAM_BRANCH }}
+
+      - name: Check if sync needed
+        id: check
+        run: |
+          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/${{ env.UPSTREAM_BRANCH }} 2>/dev/null || echo "0")
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+
+          if [ "$COMMITS_BEHIND" -eq 0 ] && [ "${{ inputs.force_pr }}" != "true" ]; then
+            echo "Already up to date with upstream"
+            echo "needs_sync=false" >> $GITHUB_OUTPUT
+          else
+            echo "Sync needed: $COMMITS_BEHIND commits behind"
+            echo "needs_sync=true" >> $GITHUB_OUTPUT
+          fi
+
+          # Get upstream commit info for PR description
+          LATEST_SHA=$(git rev-parse --short upstream/${{ env.UPSTREAM_BRANCH }})
+          LATEST_DATE=$(git log -1 --format=%cd --date=short upstream/${{ env.UPSTREAM_BRANCH }})
+          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          echo "latest_date=$LATEST_DATE" >> $GITHUB_OUTPUT
+
+          # Get commit log
+          COMMIT_LOG=$(git log --oneline HEAD..upstream/${{ env.UPSTREAM_BRANCH }} | head -20)
+          echo "commit_log<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMIT_LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check for existing PR
+        id: existing_pr
+        if: steps.check.outputs.needs_sync == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look for open PRs with sync branch pattern
+          EXISTING=$(gh pr list --head "sync/" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "Existing sync PR: #$EXISTING"
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.needs_sync == 'true' && steps.existing_pr.outputs.exists != 'true'
+        id: branch
+        run: |
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Attempt merge
+        if: steps.check.outputs.needs_sync == 'true' && steps.existing_pr.outputs.exists != 'true'
+        id: merge
+        continue-on-error: true
+        run: |
+          if git merge upstream/${{ env.UPSTREAM_BRANCH }} --no-edit; then
+            echo "merge_status=success" >> $GITHUB_OUTPUT
+          else
+            echo "merge_status=conflict" >> $GITHUB_OUTPUT
+            git merge --abort
+          fi
+
+      - name: Validate fork customizations
+        if: steps.merge.outputs.merge_status == 'success'
+        id: validate
+        run: |
+          bash .github/upstream-sync/validate.sh
+          echo "validation_status=passed" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Capture validation failure
+        if: steps.merge.outputs.merge_status == 'success' && steps.validate.outcome == 'failure'
+        id: validate_failed
+        run: |
+          echo "validation_status=failed" >> $GITHUB_OUTPUT
+          # Re-run to capture output
+          VALIDATION_OUTPUT=$(bash .github/upstream-sync/validate.sh 2>&1 || true)
+          echo "validation_errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$VALIDATION_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Push sync branch
+        if: steps.merge.outputs.merge_status == 'success' && steps.validate.outcome == 'success'
+        run: |
+          git push -u origin "${{ steps.branch.outputs.branch_name }}"
+
+      - name: Create Pull Request (clean merge)
+        if: steps.merge.outputs.merge_status == 'success' && steps.validate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base dev \
+            --title "Sync with upstream (${{ steps.check.outputs.latest_date }})" \
+            --body "## Upstream Sync
+
+          Merges **${{ steps.check.outputs.commits_behind }}** commits from [upstream](https://github.com/${{ env.UPSTREAM_REPO }}).
+
+          **Latest upstream commit:** \`${{ steps.check.outputs.latest_sha }}\` (${{ steps.check.outputs.latest_date }})
+
+          ### Commits included:
+          \`\`\`
+          ${{ steps.check.outputs.commit_log }}
+          \`\`\`
+
+          ### Validation
+          All fork customizations preserved:
+          - \`server/src/middleware/sparkaSessionMiddleware.ts\` - Sparka SSO
+          - \`server/src/routers/sparkaRouter.ts\` - Sparka SSO routes
+          - \`server/src/init.ts\` - Self-hosted frontend serving + SSO
+          - \`server/src/initHono.ts\` - Health check endpoint
+          - \`server/src/utils/auth.ts\` - TRUSTED_ORIGIN support
+          - \`docker/Dockerfile\` - Self-hosted build
+          - CI/CD workflows (GHCR, sync, Trivy)
+
+          ### After Merging
+          The GHCR build workflow will automatically:
+          1. Build and push to \`ghcr.io/masonjames/autumn:latest\`
+          2. Trigger Dokploy webhook deploy
+
+          ---
+          *Automatically created by upstream-sync-pr workflow*"
+
+      - name: Create issue for conflicts
+        if: steps.merge.outputs.merge_status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh issue list --search "Upstream sync" --state open --json number --jq '.[0].number')
+
+          if [ -z "$EXISTING" ]; then
+            gh issue create \
+              --title "Upstream sync requires manual resolution" \
+              --body "## Merge Conflicts Detected
+
+          The automated sync with upstream encountered merge conflicts.
+
+          **Commits behind:** ${{ steps.check.outputs.commits_behind }}
+          **Latest upstream:** \`${{ steps.check.outputs.latest_sha }}\` (${{ steps.check.outputs.latest_date }})
+
+          ### Manual sync required
+
+          Follow the [Autumn Upstream Sync Runbook](https://github.com/masonjames/platform-infra/blob/main/docs/runbooks/workflows/autumn-upstream-sync.md).
+
+          \`\`\`bash
+          git fetch upstream
+          git merge upstream/dev
+          # Resolve conflicts - pay special attention to:
+          # - server/src/init.ts (SSO + self-hosted mode)
+          # - server/src/utils/auth.ts (TRUSTED_ORIGIN)
+          # - docker/Dockerfile (self-hosted build)
+          bun install
+          git push origin dev
+          \`\`\`
+
+          ---
+          *Automatically created by upstream-sync-pr workflow*" \
+              --label "upstream-sync"
+          fi
+
+      - name: Create issue for validation failure
+        if: steps.validate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Upstream sync validation failed" \
+            --body "## Validation Failed
+
+          The upstream merge succeeded but validation of fork customizations failed.
+
+          ### Issues detected:
+          \`\`\`
+          ${{ steps.validate_failed.outputs.validation_errors }}
+          \`\`\`
+
+          ### Action required
+
+          Review the upstream changes to ensure they didn't remove our customizations.
+
+          See [Autumn Upstream Sync Runbook](https://github.com/masonjames/platform-infra/blob/main/docs/runbooks/workflows/autumn-upstream-sync.md) for the list of files to preserve.
+
+          ---
+          *Automatically created by upstream-sync-pr workflow*" \
+            --label "upstream-sync"
+
+      - name: Summary
+        run: |
+          echo "## Upstream Sync PR Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.check.outputs.needs_sync }}" != "true" ]; then
+            echo "Already up to date with upstream" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.existing_pr.outputs.exists }}" == "true" ]; then
+            echo "Sync PR already exists: #${{ steps.existing_pr.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.merge.outputs.merge_status }}" == "conflict" ]; then
+            echo "Merge conflicts detected - issue created for manual resolution" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.validate.outcome }}" == "failure" ]; then
+            echo "Validation failed - fork customizations may be missing" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Sync PR created successfully" >> $GITHUB_STEP_SUMMARY
+          fi
