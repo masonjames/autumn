@@ -21,6 +21,7 @@ import { beforeSessionCreated } from "./authUtils/beforeSessionCreated.js";
 import { ADMIN_USER_IDs } from "./constants.js";
 
 export const auth = betterAuth({
+	secret: process.env.BETTER_AUTH_SECRET,
 	baseURL: process.env.BETTER_AUTH_URL,
 	telemetry: {
 		enabled: false,

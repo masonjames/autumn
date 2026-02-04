@@ -35,6 +35,10 @@ checkEnvVars();
 
 const init = async () => {
 	const app = express();
+
+	// Trust proxy headers from Traefik for correct protocol/host detection
+	app.set("trust proxy", 1);
+
 	const server = http.createServer(app);
 	server.keepAliveTimeout = 120000; // 120 seconds
 	server.headersTimeout = 120000; // 120 seconds should be >= keepAliveTimeout
