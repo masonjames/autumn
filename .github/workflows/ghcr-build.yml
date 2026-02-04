@@ -2,8 +2,7 @@ name: Build and Push to GHCR
 
 on:
   push:
-    branches:
-      - dev
+    branches: [dev]
   workflow_dispatch:
 
 permissions:
@@ -17,8 +16,5 @@ jobs:
       contents: read
       packages: write
     with:
-      dockerfile: './docker/Dockerfile'
-      context: '.'
-      platforms: 'linux/amd64'
       deploy_on_branch: 'dev'
     secrets: inherit
