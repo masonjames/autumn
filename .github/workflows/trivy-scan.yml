@@ -25,10 +25,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Run Trivy vulnerability scanner (filesystem)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.69.3 - pinned due to supply chain compromise of v0.69.4+
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -37,14 +37,14 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload filesystem scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3
         if: always()
         with:
           sarif_file: 'trivy-fs-results.sarif'
           category: 'trivy-filesystem'
 
       - name: Run Trivy on latest image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.69.3 - pinned due to supply chain compromise of v0.69.4+
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           format: 'sarif'
@@ -53,7 +53,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload image scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3
         if: always()
         with:
           sarif_file: 'trivy-image-results.sarif'
